@@ -169,6 +169,47 @@ class PissaConvertCallback(TrainerCallback):
                 setattr(model.peft_config["default"], "init_lora_weights", init_lora_weights)
 
 
+class GracefulStopCallback(TrainerCallback):
+    r"""A callback for saving a checkpoint and stopping training on SIGINT/SIGTERM.
+
+    On the first signal, sets flags so the trainer finishes the current step,
+    saves a checkpoint, and exits cleanly. A second signal restores the default
+    handler, so pressing Ctrl+C twice still force-kills the process.
+    """
+
+    def __init__(self) -> None:
+        self._original_sigint = None
+        self._original_sigterm = None
+        self._control = None
+
+    def _handler(self, signum, frame) -> None:
+        sig_name = signal.Signals(signum).name
+        logger.info_rank0(f"Received {sig_name} — finishing current step, saving checkpoint, then stopping.")
+        if self._control is not None:
+            self._control.should_training_stop = True
+            self._control.should_save = True
+        # Restore default handlers so a second signal kills immediately
+        signal.signal(signal.SIGINT, self._original_sigint or signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, self._original_sigterm or signal.SIG_DFL)
+
+    @override
+    def on_train_begin(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
+        self._control = control
+        self._original_sigint = signal.getsignal(signal.SIGINT)
+        self._original_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGINT, self._handler)
+        signal.signal(signal.SIGTERM, self._handler)
+
+    @override
+    def on_step_end(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
+        self._control = control
+
+    @override
+    def on_train_end(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
+        signal.signal(signal.SIGINT, self._original_sigint or signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, self._original_sigterm or signal.SIG_DFL)
+
+
 class LogCallback(TrainerCallback):
     r"""A callback for logging training and evaluation status."""
 

@@ -27,7 +27,7 @@ from ..extras.misc import find_available_port, get_device_name, get_torch_device
 from ..extras.packages import is_mcore_adapter_available, is_ray_available, is_transformers_version_greater_than
 from ..hparams import RayArguments, get_infer_args, get_ray_args, get_train_args, read_args
 from ..model import load_model, load_tokenizer
-from .callbacks import LogCallback, PissaConvertCallback, ReporterCallback
+from .callbacks import GracefulStopCallback, LogCallback, PissaConvertCallback, ReporterCallback
 from .dpo import run_dpo
 from .kto import run_kto
 from .ppo import run_ppo
@@ -59,6 +59,7 @@ def _training_function(config: dict[str, Any]) -> None:
     callbacks: list[Any] = config.get("callbacks")
     model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(args)
 
+    callbacks.append(GracefulStopCallback())
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
         callbacks.append(PissaConvertCallback())
