@@ -206,6 +206,12 @@ class GracefulStopCallback(TrainerCallback):
         self._original_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, self._handler)
         signal.signal(signal.SIGTERM, self._handler)
+        if args.world_size > 1:
+            logger.warning_rank0_once(
+                "save_on_interrupt is enabled with distributed training. "
+                "Use Ctrl+C or `kill` the launcher process (e.g. torchrun) to signal all ranks. "
+                "Sending a signal to a single worker may cause hangs."
+            )
 
     @override
     def on_step_end(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
@@ -228,10 +234,11 @@ class GracefulStopCallback(TrainerCallback):
             if self._original_save_total_limit is not None:
                 args.save_total_limit = self._original_save_total_limit
                 self._original_save_total_limit = None
-            # Rename checkpoint so it is excluded from future rotation
+            # Rename checkpoint so it is excluded from future rotation.
+            # Only rank 0 performs the rename to avoid race conditions in DDP.
             src = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
             dst = os.path.join(args.output_dir, f"interrupt-{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
-            if os.path.isdir(src):
+            if args.should_save and os.path.isdir(src):
                 os.rename(src, dst)
                 logger.info_rank0(f"Interrupt checkpoint saved at: {dst}")
 
