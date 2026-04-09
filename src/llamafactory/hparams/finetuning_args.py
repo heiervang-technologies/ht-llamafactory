@@ -556,6 +556,16 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to compute effective tokens per second."},
     )
+    save_on_interrupt: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to save a checkpoint on SIGINT/SIGTERM before stopping. "
+                "The interrupt checkpoint is saved as interrupt-checkpoint-{step} "
+                "and does not count towards save_total_limit."
+            )
+        },
+    )
 
     def __post_init__(self):
         def split_arg(arg):
