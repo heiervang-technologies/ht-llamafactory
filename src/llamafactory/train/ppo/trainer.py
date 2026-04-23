@@ -303,6 +303,12 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 self.callback_handler.on_save(self.args, self.state, self.control)
 
             if self.control.should_epoch_stop or self.control.should_training_stop:
+                if self.control.should_save:
+                    checkpoint_dir = os.path.join(
+                        self.args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+                    )
+                    self.save_model(checkpoint_dir)
+                    self.callback_handler.on_save(self.args, self.state, self.control)
                 break
 
         self.callback_handler.on_train_end(self.args, self.state, self.control)

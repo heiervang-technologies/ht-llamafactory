@@ -32,7 +32,7 @@ from ..extras.packages import (
 )
 from ..hparams import RayArguments, get_infer_args, get_ray_args, get_train_args, read_args
 from ..model import load_model, load_tokenizer
-from .callbacks import LogCallback, PissaConvertCallback, ReporterCallback
+from .callbacks import GracefulStopCallback, LogCallback, PissaConvertCallback, ReporterCallback
 from .dpo import run_dpo
 from .kto import run_kto
 from .ppo import run_ppo
@@ -63,6 +63,9 @@ def _training_function(config: dict[str, Any]) -> None:
     args = config.get("args")
     callbacks: list[Any] = config.get("callbacks")
     model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(args)
+
+    if finetuning_args.save_on_interrupt:
+        callbacks.append(GracefulStopCallback())
 
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
