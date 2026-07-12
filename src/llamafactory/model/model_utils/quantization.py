@@ -170,26 +170,65 @@ def configure_quantization(
                 init_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
             elif model_args.quantization_bit == 4:
                 check_version("bitsandbytes>=0.39.0", mandatory=True)
+                # llm_int8_enable_fp32_cpu_offload=True allows CPU-offloaded modules (e.g. embed_tokens)
+                # to stay in fp32 on CPU while GPU modules are quantized to 4-bit.
                 init_kwargs["quantization_config"] = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=model_args.compute_dtype,
                     bnb_4bit_use_double_quant=model_args.double_quantization,
                     bnb_4bit_quant_type=model_args.quantization_type,
                     bnb_4bit_quant_storage=model_args.compute_dtype,  # crucial for fsdp+qlora
+                    llm_int8_enable_fp32_cpu_offload=True,
                 )
             else:
                 raise ValueError("Bitsandbytes only accepts 4-bit or 8-bit quantization.")
 
             # Do not assign device map if:
             # 1. deepspeed zero3 or fsdp (train)
-            # 2. auto quantization device map (inference)
-            if is_deepspeed_zero3_enabled() or is_fsdp_enabled() or model_args.quantization_device_map == "auto":
+            # 2. auto quantization device map (allows CPU offload for large models)
+            if is_deepspeed_zero3_enabled() or is_fsdp_enabled():
                 if model_args.quantization_bit != 4:
-                    raise ValueError("Only 4-bit quantized model can use fsdp+qlora or auto device map.")
+                    raise ValueError("Only 4-bit quantized model can use fsdp+qlora.")
 
                 check_version("bitsandbytes>=0.43.0", mandatory=True)
+            elif model_args.quantization_device_map == "auto":
+                if model_args.quantization_bit != 4:
+                    raise ValueError("Only 4-bit quantized model can use auto device map.")
+
+                check_version("bitsandbytes>=0.43.0", mandatory=True)
+                import os
+                from accelerate.utils import get_max_memory
+
+                max_memory = get_max_memory()
+                # Reserve headroom for display processes and CUDA context overhead.
+                # get_max_memory() returns total VRAM which over-estimates available memory
+                # on machines with a display server running. Default: 3 GiB.
+                gpu_headroom_bytes = int(os.environ.get("GPU_HEADROOM_MIB", "3072")) * 1024 * 1024
+                for key in list(max_memory.keys()):
+                    if key != "cpu":
+                        max_memory[key] = max(0, max_memory[key] - gpu_headroom_bytes)
+                init_kwargs["device_map"] = "auto"
+                init_kwargs["max_memory"] = max_memory
             else:
-                init_kwargs["device_map"] = {"": get_current_device()}  # change auto device map for inference
+                # For multimodal models doing text-only SFT, load vision/audio towers on CPU.
+                model_type = getattr(config, "model_type", None)
+
+                if model_type == "gemma4" and is_trainable:
+                    init_kwargs["device_map"] = {"": get_current_device()}
+                else:
+                    # Fall back to COMPOSITE_MODELS registry for other multimodal architectures.
+                    from .visual import COMPOSITE_MODELS
+
+                    if model_type in COMPOSITE_MODELS and is_trainable:
+                        vision_keys = COMPOSITE_MODELS[model_type].vision_model_keys
+                        device_map = {"": get_current_device()}
+                        for key in vision_keys:
+                            device_map[f"model.{key}"] = "cpu"
+                            device_map[f"model.embed_{key.replace('_tower', '')}"] = "cpu"
+                        init_kwargs["device_map"] = device_map
+                        logger.info_rank0(f"Loading vision/audio towers on CPU to save GPU VRAM: {vision_keys}")
+                    else:
+                        init_kwargs["device_map"] = {"": get_current_device()}
 
             logger.info_rank0(f"Quantizing model to {model_args.quantization_bit} bit with bitsandbytes.")
         elif model_args.quantization_method == QuantizationMethod.HQQ:

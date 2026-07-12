@@ -32,6 +32,7 @@ from ..extras.misc import count_parameters, skip_check_imports, try_download_mod
 from ..extras.packages import is_torch_version_greater_than
 from .adapter import init_adapter
 from .model_utils.ktransformers import load_kt_pretrained_model
+from .model_utils.visual import COMPOSITE_MODELS
 from .model_utils.liger_kernel import apply_liger_kernel
 from .model_utils.misc import register_autoclass
 from .model_utils.mod import convert_pretrained_model_to_mod, load_mod_pretrained_model
@@ -187,6 +188,24 @@ def load_model(
         register_autoclass(config, model, tokenizer)
 
     model = init_adapter(config, model, model_args, finetuning_args, is_trainable)
+
+    # For text-only SFT on multimodal models, move frozen vision/audio towers to CPU to free VRAM.
+    # These towers are never called during text-only forward passes so moving them to CPU is safe.
+    if is_trainable:
+        model_type = getattr(config, "model_type", None)
+        if model_type in COMPOSITE_MODELS:
+            vision_keys = COMPOSITE_MODELS[model_type].vision_model_keys
+            for mod_key in vision_keys:
+                for name, module in model.named_modules():
+                    if name == mod_key or name.startswith(mod_key + "."):
+                        for param in module.parameters(recurse=False):
+                            if param.device.type != "cpu":
+                                param.data = param.data.cpu()
+                        for buf in module.buffers(recurse=False):
+                            if buf.device.type != "cpu":
+                                buf.data = buf.data.cpu()
+            if vision_keys:
+                logger.info_rank0(f"Moved frozen vision/audio towers to CPU to free VRAM: {vision_keys}")
 
     if add_valuehead:
         model = AutoModelForCausalLMWithValueHead.from_pretrained(model)

@@ -353,8 +353,8 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
         if finetuning_args.compute_accuracy:
             raise ValueError("Cannot use `predict_with_generate` and `compute_accuracy` together.")
 
-    if training_args.do_train and model_args.quantization_device_map == "auto":
-        raise ValueError("Cannot use device map for quantized models in training.")
+    # NOTE: quantization_device_map="auto" is allowed for bitsandbytes 4-bit LoRA training
+    # to enable CPU offload when model exceeds GPU VRAM. The original block was overly conservative.
 
     if finetuning_args.pissa_init and is_deepspeed_zero3_enabled():
         raise ValueError("Please use scripts/pissa_init.py to initialize PiSSA in DeepSpeed ZeRO-3.")
@@ -496,7 +496,10 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     elif training_args.fp16:
         model_args.compute_dtype = torch.float16
 
-    model_args.device_map = {"": get_current_device()}
+    if model_args.quantization_device_map == "auto":
+        model_args.device_map = "auto"  # allow CPU offload for oversized quantized models
+    else:
+        model_args.device_map = {"": get_current_device()}
     model_args.model_max_length = data_args.cutoff_len
     model_args.block_diag_attn = data_args.neat_packing
     data_args.packing = data_args.packing if data_args.packing is not None else finetuning_args.stage == "pt"
